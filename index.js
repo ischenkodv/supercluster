@@ -1,6 +1,74 @@
 'use strict';
 
 var kdbush = require('kdbush');
+var d3 = require('d3-quadtree');
+
+function makeTree(points, getX, getY) {
+    var tree = d3.quadtree();
+    tree.x(getX);
+    tree.y(getY);
+    tree.addAll(points);
+    return tree;
+}
+
+function sqDist(ax, ay, bx, by) {
+    var dx = ax - bx;
+    var dy = ay - by;
+    return dx * dx + dy * dy;
+}
+
+function pointRectDist(px, py, rx, ry, rwidth, rheight) {
+    //var cx = Math.max(Math.min(px, rx+rwidth ), rx);
+    //var cy = Math.max(Math.min(py, ry+rheight), ry);
+    //return Math.sqrt((px-cx)*(px-cx) + (py-cy)*(py-cy));
+
+    var dx = Math.max(Math.abs(px - rx) - rwidth / 2, 0);
+    var dy = Math.max(Math.abs(py - ry) - rheight / 2, 0);
+    return dx * dx + dy * dy;
+}
+
+function within(tree, centerX, centerY, r) {
+    var r2 = r * r;
+    var result = [];
+    var getX = tree.x();
+    var getY = tree.y();
+
+    tree.visit(function(node, x0, y0, x1, y1) {
+        if (node && node.data) {
+            if (sqDist(getX(node.data), getY(node.data), centerX, centerY) < r2) {
+                result.push(node.data);
+            }
+        }
+        var rw = x1 - x0;
+        var rh = y1 - y0;
+        var dist = pointRectDist(centerX, centerY, x0 + (rw / 2), y0 + (rh / 2), rw, rh);
+        if (dist > r2) {
+            return true;
+        }
+    });
+    return result;
+}
+
+function range(tree, xb0, yb0, xb1, yb1) {
+    var result = [];
+    var getX = tree.x();
+    var getY = tree.y();
+
+    tree.visit(function(node, x0, y0, x1, y1) {
+        if (node && node.data) {
+            var x = getX(node.data);
+            var y = getY(node.data);
+            if (x >= xb0 && x <= xb1 && y >= yb0 && y <= yb1) {
+                result.push(node.data);
+            }
+        }
+        if (xb1 < x0 || x1 < xb0 || yb1 < y0 || y1 < yb0) {
+            return true;
+        }
+    });
+
+    return result;
+}
 
 module.exports = supercluster;
 
@@ -11,6 +79,7 @@ function supercluster(options) {
 function SuperCluster(options) {
     this.options = extend(Object.create(this.options), options);
     this.trees = new Array(this.options.maxZoom + 1);
+    this.quadTrees = new Array(this.options.maxZoom + 1);
 }
 
 SuperCluster.prototype = {
@@ -44,6 +113,7 @@ SuperCluster.prototype = {
 
         // generate a cluster object for each point and index input points into a KD-tree
         var clusters = points.map(createPointCluster);
+        this.quadTrees[this.options.maxZoom + 1] = makeTree(clusters, getX, getY);
         this.trees[this.options.maxZoom + 1] = kdbush(clusters, getX, getY, this.options.nodeSize, Float32Array);
 
         if (log) console.timeEnd(timerId);
@@ -56,6 +126,7 @@ SuperCluster.prototype = {
             // create a new set of clusters for the zoom and index them with a KD-tree
             clusters = this._cluster(clusters, z);
             this.trees[z] = kdbush(clusters, getX, getY, this.options.nodeSize, Float32Array);
+            this.quadTrees[z] = makeTree(clusters, getX, getY);
 
             if (log) console.log('z%d: %d clusters in %dms', z, clusters.length, +Date.now() - now);
         }
@@ -68,21 +139,29 @@ SuperCluster.prototype = {
     getClusters: function (bbox, zoom) {
         var tree = this.trees[this._limitZoom(zoom)];
         var ids = tree.range(lngX(bbox[0]), latY(bbox[3]), lngX(bbox[2]), latY(bbox[1]));
+        var quadTree = this.quadTrees[this._limitZoom(zoom)];
+        var nodes = range(quadTree, lngX(bbox[0]), latY(bbox[3]), lngX(bbox[2]), latY(bbox[1]));
         var clusters = [];
-        for (var i = 0; i < ids.length; i++) {
-            var c = tree.points[ids[i]];
+        for (var i = 0; i < nodes.length; i++) {
+            var c = nodes[i];
             clusters.push(c.numPoints ? getClusterJSON(c) : this.points[c.id]);
         }
         return clusters;
     },
 
     getChildren: function (clusterId, clusterZoom) {
-        var origin = this.trees[clusterZoom + 1].points[clusterId];
+        var quadTree = this.quadTrees[clusterZoom + 1];
+        var origin = quadTree.data().find((node) => node.id === clusterId);
+        //console.log('origin', origin);
         var r = this.options.radius / (this.options.extent * Math.pow(2, clusterZoom));
+        var qt = this.quadTrees[clusterZoom + 1];
+        var nodes = within(qt, origin.x, origin.y, r).map((v) => v.id);
+
         var ids = this.trees[clusterZoom + 1].within(origin.x, origin.y, r);
         var children = [];
-        for (var i = 0; i < ids.length; i++) {
-            var c = this.trees[clusterZoom + 1].points[ids[i]];
+        for (var i = 0; i < nodes.length; i++) {
+            var c = nodes[i];
+            //console.log('c', c, ids[i]);
             if (c.parentId === clusterId) {
                 children.push(c.numPoints ? getClusterJSON(c) : this.points[c.id]);
             }
@@ -101,7 +180,8 @@ SuperCluster.prototype = {
     },
 
     getTile: function (z, x, y) {
-        var tree = this.trees[this._limitZoom(z)];
+        //var tree = this.trees[this._limitZoom(z)];
+        var quadTree = this.quadTrees[this._limitZoom(z)];
         var z2 = Math.pow(2, z);
         var extent = this.options.extent;
         var r = this.options.radius;
@@ -113,19 +193,22 @@ SuperCluster.prototype = {
             features: []
         };
 
+        //console.log('range', range(quadTree, (x - p) / z2, top, (x + 1 + p) / z2, bottom));
         this._addTileFeatures(
-            tree.range((x - p) / z2, top, (x + 1 + p) / z2, bottom),
-            tree.points, x, y, z2, tile);
+            range(quadTree, (x - p) / z2, top, (x + 1 + p) / z2, bottom),
+            x, y, z2, tile);
 
         if (x === 0) {
+        //console.log('range', range(quadTree, 1 - p / z2, top, 1, bottom));
             this._addTileFeatures(
-                tree.range(1 - p / z2, top, 1, bottom),
-                tree.points, z2, y, z2, tile);
+                range(quadTree, 1 - p / z2, top, 1, bottom),
+                z2, y, z2, tile);
         }
         if (x === z2 - 1) {
+        //console.log('range', range(quadTree, 0, top, p / z2, bottom));
             this._addTileFeatures(
-                tree.range(0, top, p / z2, bottom),
-                tree.points, -1, y, z2, tile);
+                range(quadTree, 0, top, p / z2, bottom),
+                -1, y, z2, tile);
         }
 
         return tile.features.length ? tile : null;
@@ -170,9 +253,9 @@ SuperCluster.prototype = {
         return skipped;
     },
 
-    _addTileFeatures: function (ids, points, x, y, z2, tile) {
-        for (var i = 0; i < ids.length; i++) {
-            var c = points[ids[i]];
+    _addTileFeatures: function (nodes, x, y, z2, tile) {
+        for (var i = 0; i < nodes.length; i++) {
+            var c = nodes[i];
             tile.features.push({
                 type: 1,
                 geometry: [[
@@ -200,8 +283,8 @@ SuperCluster.prototype = {
             p.zoom = zoom;
 
             // find all nearby points
-            var tree = this.trees[zoom + 1];
-            var neighborIds = tree.within(p.x, p.y, r);
+            var qt = this.quadTrees[zoom + 1];
+            var neighbors = within(qt, p.x, p.y, r);
 
             var numPoints = p.numPoints || 1;
             var wx = p.x * numPoints;
@@ -214,8 +297,8 @@ SuperCluster.prototype = {
                 this._accumulate(clusterProperties, p);
             }
 
-            for (var j = 0; j < neighborIds.length; j++) {
-                var b = tree.points[neighborIds[j]];
+            for (var j = 0; j < neighbors.length; j++) {
+                var b = neighbors[j];
                 // filter out neighbors that are already processed
                 if (b.zoom <= zoom) continue;
                 b.zoom = zoom; // save the zoom (so it doesn't get processed twice)
@@ -242,6 +325,61 @@ SuperCluster.prototype = {
 
         return clusters;
     },
+
+    //_cluster: function (points, zoom) {
+        //var clusters = [];
+        //var r = this.options.radius / (this.options.extent * Math.pow(2, zoom));
+
+        //// loop through each point
+        //for (var i = 0; i < points.length; i++) {
+            //var p = points[i];
+            //// if we've already visited the point at this zoom level, skip it
+            //if (p.zoom <= zoom) continue;
+            //p.zoom = zoom;
+
+            //// find all nearby points
+            //var tree = this.trees[zoom + 1];
+            //var neighborIds = tree.within(p.x, p.y, r);
+
+            //var numPoints = p.numPoints || 1;
+            //var wx = p.x * numPoints;
+            //var wy = p.y * numPoints;
+
+            //var clusterProperties = null;
+
+            //if (this.options.reduce) {
+                //clusterProperties = this.options.initial();
+                //this._accumulate(clusterProperties, p);
+            //}
+
+            //for (var j = 0; j < neighborIds.length; j++) {
+                //var b = tree.points[neighborIds[j]];
+                //// filter out neighbors that are already processed
+                //if (b.zoom <= zoom) continue;
+                //b.zoom = zoom; // save the zoom (so it doesn't get processed twice)
+
+                //var numPoints2 = b.numPoints || 1;
+                //wx += b.x * numPoints2; // accumulate coordinates for calculating weighted center
+                //wy += b.y * numPoints2;
+
+                //numPoints += numPoints2;
+                //b.parentId = i;
+
+                //if (this.options.reduce) {
+                    //this._accumulate(clusterProperties, b);
+                //}
+            //}
+
+            //if (numPoints === 1) {
+                //clusters.push(p);
+            //} else {
+                //p.parentId = i;
+                //clusters.push(createCluster(wx / numPoints, wy / numPoints, i, numPoints, clusterProperties));
+            //}
+        //}
+
+        //return clusters;
+    //},
 
     _accumulate: function (clusterProperties, point) {
         var properties = point.numPoints ?
