@@ -1,6 +1,5 @@
 'use strict';
 
-var kdbush = require('kdbush');
 var d3 = require('d3-quadtree');
 
 function makeTree(points, getX, getY) {
@@ -18,10 +17,6 @@ function sqDist(ax, ay, bx, by) {
 }
 
 function pointRectDist(px, py, rx, ry, rwidth, rheight) {
-    //var cx = Math.max(Math.min(px, rx+rwidth ), rx);
-    //var cy = Math.max(Math.min(py, ry+rheight), ry);
-    //return Math.sqrt((px-cx)*(px-cx) + (py-cy)*(py-cy));
-
     var dx = Math.max(Math.abs(px - rx) - rwidth / 2, 0);
     var dy = Math.max(Math.abs(py - ry) - rheight / 2, 0);
     return dx * dx + dy * dy;
