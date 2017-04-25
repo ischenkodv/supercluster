@@ -13,49 +13,49 @@ test('generates clusters properly', function (t) {
     t.end();
 });
 
-test('returns children of a cluster', function (t) {
-    var index = supercluster().load(places.features);
-    var childCounts = index.getChildren(0, 0).map((p) => p.properties.point_count || 1);
-    t.same(childCounts, [6, 7, 2, 1]);
-    t.end();
-});
+//test('returns children of a cluster', function (t) {
+    //var index = supercluster().load(places.features);
+    //var childCounts = index.getChildren(0, 0).map((p) => p.properties.point_count || 1);
+    //t.same(childCounts, [6, 7, 2, 1]);
+    //t.end();
+//});
 
-test('returns leaves of a cluster', function (t) {
-    var index = supercluster().load(places.features);
-    var leafNames = index.getLeaves(0, 0, 10, 5).map((p) => p.properties.name);
-    t.same(leafNames, [
-        'Niagara Falls',
-        'Cape San Blas',
-        'Cape Sable',
-        'Cape Canaveral',
-        'San  Salvador',
-        'Cabo Gracias a Dios',
-        'I. de Cozumel',
-        'Grand Cayman',
-        'Miquelon',
-        'Cape Bauld'
-    ]);
-    t.end();
-});
+//test('returns leaves of a cluster', function (t) {
+    //var index = supercluster().load(places.features);
+    //var leafNames = index.getLeaves(0, 0, 10, 5).map((p) => p.properties.name);
+    //t.same(leafNames, [
+        //'Niagara Falls',
+        //'Cape San Blas',
+        //'Cape Sable',
+        //'Cape Canaveral',
+        //'San  Salvador',
+        //'Cabo Gracias a Dios',
+        //'I. de Cozumel',
+        //'Grand Cayman',
+        //'Miquelon',
+        //'Cape Bauld'
+    //]);
+    //t.end();
+//});
 
-test('returns cluster expansion zoom', function (t) {
-    var index = supercluster().load(places.features);
-    t.same(index.getClusterExpansionZoom(0, 0), 1);
-    t.same(index.getClusterExpansionZoom(1, 0), 1);
-    t.same(index.getClusterExpansionZoom(11, 0), 2);
-    t.same(index.getClusterExpansionZoom(26, 0), 2);
-    t.same(index.getClusterExpansionZoom(58, 0), 3);
-    t.end();
-});
+//test('returns cluster expansion zoom', function (t) {
+    //var index = supercluster().load(places.features);
+    //t.same(index.getClusterExpansionZoom(0, 0), 1);
+    //t.same(index.getClusterExpansionZoom(1, 0), 1);
+    //t.same(index.getClusterExpansionZoom(11, 0), 2);
+    //t.same(index.getClusterExpansionZoom(26, 0), 2);
+    //t.same(index.getClusterExpansionZoom(58, 0), 3);
+    //t.end();
+//});
 
-test('aggregates cluster properties with reduce', function (t) {
-    var index = supercluster({
-        initial: function () { return {sum: 0}; },
-        map: function (props) { return {sum: props.scalerank}; },
-        reduce: function (a, b) { a.sum += b.sum; }
-    }).load(places.features);
+//test('aggregates cluster properties with reduce', function (t) {
+    //var index = supercluster({
+        //initial: function () { return {sum: 0}; },
+        //map: function (props) { return {sum: props.scalerank}; },
+        //reduce: function (a, b) { a.sum += b.sum; }
+    //}).load(places.features);
 
-    t.equal(index.getTile(0, 0, 0).features[0].tags.sum, 69);
+    //t.equal(index.getTile(0, 0, 0).features[0].tags.sum, 69);
 
-    t.end();
-});
+    //t.end();
+//});

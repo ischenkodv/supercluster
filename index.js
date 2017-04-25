@@ -1,8 +1,66 @@
 'use strict';
 
-var kdbush = require('kdbush');
+//var kdbush = require('kdbush');
+var rbush = require('rbush');
 
 module.exports = supercluster;
+
+function within(tree, x, y, r) {
+
+    var node = tree.data,
+        result = [],
+        toBBox = tree.toBBox,
+        bbox = {minX: x - r, minY: y - r, maxX: x + r, maxY: y + r},
+        r2 = r * r;
+
+    if (!intersects(bbox, node)) return result;
+
+    var nodesToSearch = [],
+        i, len, child, childBBox;
+
+    while (node) {
+        for (i = 0, len = node.children.length; i < len; i++) {
+
+            child = node.children[i];
+            childBBox = node.leaf ? toBBox(child) : child;
+
+            if (intersects(bbox, childBBox)) {
+                if (node.leaf) {
+                    if (sqDist(x, y, childBBox.minX, childBBox.minY) < r2) {
+                        result.push(child);
+                    }
+                } else if (contains(bbox, childBBox)) {
+                    tree._all(child, result);
+                } else {
+                    nodesToSearch.push(child);
+                }
+            }
+        }
+        node = nodesToSearch.pop();
+    }
+
+    return result;
+}
+
+function sqDist(ax, ay, bx, by) {
+    var dx = ax - bx;
+    var dy = ay - by;
+    return dx * dx + dy * dy;
+}
+
+function contains(a, b) {
+    return a.minX <= b.minX &&
+           a.minY <= b.minY &&
+           b.maxX <= a.maxX &&
+           b.maxY <= a.maxY;
+}
+
+function intersects(a, b) {
+    return b.minX <= a.maxX &&
+           b.minY <= a.maxY &&
+           b.maxX >= a.minX &&
+           b.maxY >= a.minY;
+}
 
 function supercluster(options) {
     return new SuperCluster(options);
@@ -40,11 +98,16 @@ SuperCluster.prototype = {
         var timerId = 'prepare ' + points.length + ' points';
         if (log) console.time(timerId);
 
-        this.points = points;
+        //this.points = points;
+        this.points = [];
 
         // generate a cluster object for each point and index input points into a KD-tree
         var clusters = points.map(createPointCluster);
-        this.trees[this.options.maxZoom + 1] = kdbush(clusters, getX, getY, this.options.nodeSize, Float32Array);
+        //this.trees[this.options.maxZoom + 1] = kdbush(clusters, getX, getY, this.options.nodeSize, Float32Array);
+        var zoom = this.options.maxZoom + 1;
+        this.trees[zoom] = rbush(9, ['.x', '.y', '.x', '.y']);
+        this.trees[zoom].load(clusters);
+        this.points[zoom] = points;
 
         if (log) console.timeEnd(timerId);
 
@@ -55,7 +118,11 @@ SuperCluster.prototype = {
 
             // create a new set of clusters for the zoom and index them with a KD-tree
             clusters = this._cluster(clusters, z);
-            this.trees[z] = kdbush(clusters, getX, getY, this.options.nodeSize, Float32Array);
+            //this.trees[z] = kdbush(clusters, getX, getY, this.options.nodeSize, Float32Array);
+            this.trees[z] = rbush(9, ['.x', '.y', '.x', '.y']);
+            this.trees[z].load(clusters);
+            this.points[z] = clusters;
+            console.log('zoom', z, clusters.length);
 
             if (log) console.log('z%d: %d clusters in %dms', z, clusters.length, +Date.now() - now);
         }
@@ -66,25 +133,37 @@ SuperCluster.prototype = {
     },
 
     getClusters: function (bbox, zoom) {
-        var tree = this.trees[this._limitZoom(zoom)];
-        var ids = tree.range(lngX(bbox[0]), latY(bbox[3]), lngX(bbox[2]), latY(bbox[1]));
+        var z = this._limitZoom(zoom);
+        var tree = this.trees[z];
+        //var ids = tree.range(lngX(bbox[0]), latY(bbox[3]), lngX(bbox[2]), latY(bbox[1]));
+        var nodes = tree.search({
+            minX: lngX(bbox[0]),
+            minY: latY(bbox[3]),
+            maxX: lngX(bbox[2]),
+            maxY: latY(bbox[1])
+        });
         var clusters = [];
-        for (var i = 0; i < ids.length; i++) {
-            var c = tree.points[ids[i]];
-            clusters.push(c.numPoints ? getClusterJSON(c) : this.points[c.id]);
+        for (var i = 0; i < nodes.length; i++) {
+            var c = nodes[i];
+            //var c = tree.points[ids[i]];
+            clusters.push(c.numPoints ? getClusterJSON(c) : this.points[z][c.id]);
         }
         return clusters;
     },
 
     getChildren: function (clusterId, clusterZoom) {
-        var origin = this.trees[clusterZoom + 1].points[clusterId];
+        var z = clusterZoom + 1;
+        //var origin = this.trees[clusterZoom + 1].points[clusterId];
+        var origin = this.points[z][clusterId];
         var r = this.options.radius / (this.options.extent * Math.pow(2, clusterZoom));
-        var ids = this.trees[clusterZoom + 1].within(origin.x, origin.y, r);
+        //var ids = this.trees[clusterZoom + 1].within(origin.x, origin.y, r);
+        var nodes = within(this.trees[z], origin.x, origin.y, r);
         var children = [];
-        for (var i = 0; i < ids.length; i++) {
-            var c = this.trees[clusterZoom + 1].points[ids[i]];
+        for (var i = 0; i < nodes.length; i++) {
+            //var c = this.trees[clusterZoom + 1].points[ids[i]];
+            var c = nodes[i];
             if (c.parentId === clusterId) {
-                children.push(c.numPoints ? getClusterJSON(c) : this.points[c.id]);
+                children.push(c.numPoints ? getClusterJSON(c) : this.points[z][c.id]);
             }
         }
         return children;
@@ -101,7 +180,10 @@ SuperCluster.prototype = {
     },
 
     getTile: function (z, x, y) {
-        var tree = this.trees[this._limitZoom(z)];
+        //var tree = this.trees[this._limitZoom(z)];
+        var zoom = this._limitZoom(z);
+        console.log('zoom', zoom);
+        var tree = this.trees[zoom];
         var z2 = Math.pow(2, z);
         var extent = this.options.extent;
         var r = this.options.radius;
@@ -114,18 +196,22 @@ SuperCluster.prototype = {
         };
 
         this._addTileFeatures(
-            tree.range((x - p) / z2, top, (x + 1 + p) / z2, bottom),
-            tree.points, x, y, z2, tile);
+            tree.search({
+                minX: (x - p) / z2,
+                minY: top,
+                maxX: (x + 1 + p) / z2,
+                maxY: bottom
+            }), x, y, z2, tile);
 
         if (x === 0) {
             this._addTileFeatures(
-                tree.range(1 - p / z2, top, 1, bottom),
-                tree.points, z2, y, z2, tile);
+                tree.search({minX: 1 - p / z2, minY: top, maxX: 1, maxY: bottom}),
+                z2, y, z2, tile);
         }
         if (x === z2 - 1) {
             this._addTileFeatures(
-                tree.range(0, top, p / z2, bottom),
-                tree.points, -1, y, z2, tile);
+                tree.search({minX: 0, minY: top, maxX: p / z2, maxY: bottom}),
+                -1, y, z2, tile);
         }
 
         return tile.features.length ? tile : null;
@@ -170,16 +256,17 @@ SuperCluster.prototype = {
         return skipped;
     },
 
-    _addTileFeatures: function (ids, points, x, y, z2, tile) {
-        for (var i = 0; i < ids.length; i++) {
-            var c = points[ids[i]];
+    _addTileFeatures: function (nodes, x, y, z2, tile) {
+        var zoom = this.options.maxZoom + 1;
+        for (var i = 0; i < nodes.length; i++) {
+            var c = nodes[i];
             tile.features.push({
                 type: 1,
                 geometry: [[
                     Math.round(this.options.extent * (c.x * z2 - x)),
                     Math.round(this.options.extent * (c.y * z2 - y))
                 ]],
-                tags: c.numPoints ? getClusterProperties(c) : this.points[c.id].properties
+                tags: c.numPoints ? getClusterProperties(c) : this.points[zoom][c.id].properties
             });
         }
     },
@@ -201,7 +288,7 @@ SuperCluster.prototype = {
 
             // find all nearby points
             var tree = this.trees[zoom + 1];
-            var neighborIds = tree.within(p.x, p.y, r);
+            var neighbors = within(tree, p.x, p.y, r);
 
             var numPoints = p.numPoints || 1;
             var wx = p.x * numPoints;
@@ -214,8 +301,9 @@ SuperCluster.prototype = {
                 this._accumulate(clusterProperties, p);
             }
 
-            for (var j = 0; j < neighborIds.length; j++) {
-                var b = tree.points[neighborIds[j]];
+            for (var j = 0; j < neighbors.length; j++) {
+                var b = neighbors[j];
+                //var b = tree.points[neighborIds[j]];
                 // filter out neighbors that are already processed
                 if (b.zoom <= zoom) continue;
                 b.zoom = zoom; // save the zoom (so it doesn't get processed twice)
@@ -246,7 +334,7 @@ SuperCluster.prototype = {
     _accumulate: function (clusterProperties, point) {
         var properties = point.numPoints ?
             point.properties :
-            this.options.map(this.points[point.id].properties);
+            this.options.map(this.points[this.options.maxZoom + 1][point.id].properties);
 
         this.options.reduce(clusterProperties, properties);
     }
@@ -323,9 +411,9 @@ function extend(dest, src) {
     return dest;
 }
 
-function getX(p) {
-    return p.x;
-}
-function getY(p) {
-    return p.y;
-}
+//function getX(p) {
+    //return p.x;
+//}
+//function getY(p) {
+    //return p.y;
+//}
