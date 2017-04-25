@@ -25,8 +25,8 @@
   "author": "Vladimir Agafonkin",
   "license": "ISC",
   "dependencies": {
-    "d3-quadtree": "^1.0.3",
-    "kdbush": "^1.0.1"
+    "kdbush": "^1.0.1",
+    "rbush": "^2.0.1"
   },
   "devDependencies": {
     "browserify": "^14.0.0",
